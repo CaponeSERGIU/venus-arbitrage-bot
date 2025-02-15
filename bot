@@ -1,17 +1,90 @@
-const executeArbitrage = async () => {
-  const amount = ethers.utils.parseUnits("50000", 18);
-  const path = [
-    CONFIG.USDT, 
-    "0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5", // lisUSD
-    CONFIG.USDT
-  ];
+const { ethers } = require("ethers");
+require("dotenv").config();
+
+console.log("🚀 Starting BSC Arbitrage Bot...");
+
+// Configuration
+const config = {
+  rpcUrl: "https://bscrpc.com",
+  privateKey: process.env.PRIVATE_KEY,
+  contractAddress: process.env.CONTRACT_ADDRESS,
+  minBorrow: ethers.utils.parseUnits("50000", 18), // 50k USDT
+  pairs: [
+    {
+      path: [
+        "0x55d398326f99059fF775485246999027B3197955", // USDT
+        "0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5", // lisUSD
+        "0x55d398326f99059fF775485246999028B3197955"  // USDT
+      ],
+      dex: "PancakeSwap"
+    }
+  ]
+};
+
+// Initialize
+const provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+const wallet = new ethers.Wallet(config.privateKey, provider);
+const contract = new ethers.Contract(
+  config.contractAddress,
+  require("./artifacts/contracts/VenusArbitrage.sol/VenusArbitrage.json").abi,
+  wallet
+);
+
+console.log(`✅ Connected to BSC at block: ${await provider.getBlockNumber()}`);
+console.log(`💰 Wallet: ${wallet.address}`);
+console.log(`📜 Contract: ${config.contractAddress}`);
+
+async function monitor() {
+  console.log("\n🔍 Scanning arbitrage opportunities...");
   
-  const minProfit = amount.mul(175).div(10000);
+  try {
+    const opportunity = config.pairs[0]; // First pair
+    const amounts = await getAmountsOut(opportunity.path);
+    const profit = calculateProfit(amounts);
+    
+    console.log(`📊 Price Difference: ${ethers.utils.formatUnits(profit, 18)} USDT`);
+    
+    if (profit.gt(0)) {
+      console.log("💡 Profitable opportunity found!");
+      await executeTrade(opportunity);
+    } else {
+      console.log("⏭️  No profitable trades available");
+    }
+  } catch (error) {
+    console.error("❌ Error:", error.message);
+  }
   
-  const tx = await arbitrageContract.executeArbitrage(
-    amount,
-    path,
-    minProfit,
+  setTimeout(monitor, 15000); // Check every 15 seconds
+}
+
+async function getAmountsOut(path) {
+  const router = new ethers.Contract(
+    "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+    require("./abis/PancakeRouter.json"),
+    provider
+  );
+  return router.getAmountsOut(config.minBorrow, path);
+}
+
+function calculateProfit(amounts) {
+  const invested = amounts[0];
+  const received = amounts[amounts.length - 1];
+  return received.sub(invested);
+}
+
+async function executeTrade(opportunity) {
+  console.log("⚡ Executing trade...");
+  const tx = await contract.executeArbitrage(
+    config.minBorrow,
+    opportunity.path,
+    config.minBorrow.mul(175).div(10000), // 1.75% profit
     { gasLimit: 800000 }
   );
-};
+  console.log(`📮 Transaction sent: ${tx.hash}`);
+  const receipt = await tx.wait();
+  console.log(`✅ Confirmed in block ${receipt.blockNumber}`);
+  console.log(`⛽ Gas used: ${receipt.gasUsed.toString()}`);
+}
+
+// Start monitoring
+monitor();

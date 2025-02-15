@@ -14,77 +14,69 @@ const config = {
       path: [
         "0x55d398326f99059fF775485246999027B3197955", // USDT
         "0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5", // lisUSD
-        "0x55d398326f99059fF775485246999028B3197955"  // USDT
+        "0x55d398326f99059fF775485246999027B3197955"  // USDT
       ],
       dex: "PancakeSwap"
     }
   ]
 };
 
-// Initialize
-const provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
-const wallet = new ethers.Wallet(config.privateKey, provider);
-const contract = new ethers.Contract(
-  config.contractAddress,
-  require("./artifacts/contracts/VenusArbitrage.sol/VenusArbitrage.json").abi,
-  wallet
-);
-
-console.log(`✅ Connected to BSC at block: ${await provider.getBlockNumber()}`);
-console.log(`💰 Wallet: ${wallet.address}`);
-console.log(`📜 Contract: ${config.contractAddress}`);
-
-async function monitor() {
-  console.log("\n🔍 Scanning arbitrage opportunities...");
+async function main() {
+  // Initialize provider and wallet
+  const provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+  const wallet = new ethers.Wallet(config.privateKey, provider);
   
-  try {
-    const opportunity = config.pairs[0]; // First pair
-    const amounts = await getAmountsOut(opportunity.path);
-    const profit = calculateProfit(amounts);
-    
-    console.log(`📊 Price Difference: ${ethers.utils.formatUnits(profit, 18)} USDT`);
-    
-    if (profit.gt(0)) {
-      console.log("💡 Profitable opportunity found!");
-      await executeTrade(opportunity);
-    } else {
-      console.log("⏭️  No profitable trades available");
+  console.log(`✅ Connected to BSC. Current block: ${await provider.getBlockNumber()}`);
+  console.log(`💰 Wallet address: ${wallet.address}`);
+
+  // Load contract
+  const contract = new ethers.Contract(
+    config.contractAddress,
+    require("./artifacts/contracts/VenusArbitrage.sol/VenusArbitrage.json").abi,
+    wallet
+  );
+
+  console.log(`📜 Contract initialized at: ${config.contractAddress}`);
+
+  // Start monitoring
+  setInterval(async () => {
+    try {
+      console.log("\n🔎 Checking arbitrage opportunities...");
+      const opportunity = config.pairs[0];
+      
+      // Get price data
+      const router = new ethers.Contract(
+        "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+        require("./abis/PancakeRouter.json"),
+        provider
+      );
+      
+      const amounts = await router.getAmountsOut(config.minBorrow, opportunity.path);
+      const profit = amounts[2].sub(config.minBorrow);
+      
+      console.log(`📊 Potential profit: ${ethers.utils.formatUnits(profit, 18)} USDT`);
+
+      if (profit.gt(config.minBorrow.mul(175).div(10000))) {
+        console.log("💡 Profitable opportunity detected!");
+        const tx = await contract.executeArbitrage(
+          config.minBorrow,
+          opportunity.path,
+          config.minBorrow.mul(175).div(10000),
+          { gasLimit: 800000 }
+        );
+        console.log(`📮 Transaction sent: ${tx.hash}`);
+        const receipt = await tx.wait();
+        console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
+      } else {
+        console.log("⏭️  No profitable trades available");
+      }
+    } catch (error) {
+      console.error("❌ Error during execution:", error.message);
     }
-  } catch (error) {
-    console.error("❌ Error:", error.message);
-  }
-  
-  setTimeout(monitor, 15000); // Check every 15 seconds
+  }, 15000); // Check every 15 seconds
 }
 
-async function getAmountsOut(path) {
-  const router = new ethers.Contract(
-    "0x10ED43C718714eb63d5aA57B78B54704E256024E",
-    require("./abis/PancakeRouter.json"),
-    provider
-  );
-  return router.getAmountsOut(config.minBorrow, path);
-}
-
-function calculateProfit(amounts) {
-  const invested = amounts[0];
-  const received = amounts[amounts.length - 1];
-  return received.sub(invested);
-}
-
-async function executeTrade(opportunity) {
-  console.log("⚡ Executing trade...");
-  const tx = await contract.executeArbitrage(
-    config.minBorrow,
-    opportunity.path,
-    config.minBorrow.mul(175).div(10000), // 1.75% profit
-    { gasLimit: 800000 }
-  );
-  console.log(`📮 Transaction sent: ${tx.hash}`);
-  const receipt = await tx.wait();
-  console.log(`✅ Confirmed in block ${receipt.blockNumber}`);
-  console.log(`⛽ Gas used: ${receipt.gasUsed.toString()}`);
-}
-
-// Start monitoring
-monitor();
+main().catch(error => {
+  console.error("🔥 Critical error:", error);
+  process.exit(1);
+});

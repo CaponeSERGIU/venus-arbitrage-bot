@@ -3,12 +3,12 @@ require("dotenv").config();
 
 console.log("🚀 Starting BSC Arbitrage Bot...");
 
-// Configuration
+// Configuration (Fixed parseUnits syntax)
 const config = {
   rpcUrl: "https://bscrpc.com",
   privateKey: process.env.PRIVATE_KEY,
   contractAddress: process.env.CONTRACT_ADDRESS,
-  minBorrow: ethers.utils.parseUnits("50000", 18), // 50k USDT
+  minBorrow: ethers.parseUnits("50000", 18), // 50k USDT
   pairs: [
     {
       path: [
@@ -21,62 +21,53 @@ const config = {
   ]
 };
 
+// Rest of the script remains the same but replace:
+// ethers.utils -> ethers
+// .sub() -> - operator
+// .mul() -> * operator
+// .div() -> / operator
+
 async function main() {
-  // Initialize provider and wallet
-  const provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+  const provider = new ethers.JsonRpcProvider(config.rpcUrl);
   const wallet = new ethers.Wallet(config.privateKey, provider);
   
   console.log(`✅ Connected to BSC. Current block: ${await provider.getBlockNumber()}`);
   console.log(`💰 Wallet address: ${wallet.address}`);
 
-  // Load contract
   const contract = new ethers.Contract(
     config.contractAddress,
     require("./artifacts/contracts/VenusArbitrage.sol/VenusArbitrage.json").abi,
     wallet
   );
 
-  console.log(`📜 Contract initialized at: ${config.contractAddress}`);
-
-  // Start monitoring
   setInterval(async () => {
     try {
-      console.log("\n🔎 Checking arbitrage opportunities...");
-      const opportunity = config.pairs[0];
-      
-      // Get price data
+      console.log("\n🔎 Checking arbitrage...");
       const router = new ethers.Contract(
         "0x10ED43C718714eb63d5aA57B78B54704E256024E",
         require("./abis/PancakeRouter.json"),
         provider
       );
       
-      const amounts = await router.getAmountsOut(config.minBorrow, opportunity.path);
-      const profit = amounts[2].sub(config.minBorrow);
+      const amounts = await router.getAmountsOut.staticCall(config.minBorrow, config.pairs[0].path);
+      const profit = amounts[2] - config.minBorrow;
       
-      console.log(`📊 Potential profit: ${ethers.utils.formatUnits(profit, 18)} USDT`);
+      console.log(`📊 Potential profit: ${ethers.formatUnits(profit, 18)} USDT`);
 
-      if (profit.gt(config.minBorrow.mul(175).div(10000))) {
-        console.log("💡 Profitable opportunity detected!");
+      if (profit > (config.minBorrow * 175n) / 10000n) {
+        console.log("💡 Profit detected!");
         const tx = await contract.executeArbitrage(
           config.minBorrow,
-          opportunity.path,
-          config.minBorrow.mul(175).div(10000),
+          config.pairs[0].path,
+          (config.minBorrow * 175n) / 10000n,
           { gasLimit: 800000 }
         );
-        console.log(`📮 Transaction sent: ${tx.hash}`);
-        const receipt = await tx.wait();
-        console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
-      } else {
-        console.log("⏭️  No profitable trades available");
+        console.log(`📮 TX: ${tx.hash}`);
       }
     } catch (error) {
-      console.error("❌ Error during execution:", error.message);
+      console.error("❌ Error:", error.message);
     }
-  }, 15000); // Check every 15 seconds
+  }, 15000);
 }
 
-main().catch(error => {
-  console.error("🔥 Critical error:", error);
-  process.exit(1);
-});
+main();

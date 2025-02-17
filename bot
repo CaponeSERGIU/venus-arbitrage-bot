@@ -1,28 +1,61 @@
-const { ethers } = require("hardhat");
+const { ethers } = require("ethers");
+require("dotenv").config();
 
-async function main() {
-  // BSC Testnet addresses (checksummed)
-  const VUSDT = "0x5eE30682b1B8f85e5E4F1a094794f0B3e7109F9C"; // Convert to checksum
-  const USDT = "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd";
-  const ROUTER = "0xD99D1c33F9fC3444f8101754aBC46c52416550D1";
-
-  // Convert addresses to checksum format
-  const checksumVUSDT = ethers.getAddress(VUSDT);
-  const checksumUSDT = ethers.getAddress(USDT);
-  const checksumRouter = ethers.getAddress(ROUTER);
-
-  const VenusArbitrage = await ethers.getContractFactory("VenusArbitrage");
-  const venusArb = await VenusArbitrage.deploy(
-    checksumVUSDT,
-    checksumUSDT,
-    checksumRouter
-  );
-
-  await venusArb.waitForDeployment();
-  console.log("Deployed to:", await venusArb.getAddress());
+// Validate environment variables
+if (!process.env.PRIVATE_KEY || !process.env.CONTRACT_ADDRESS) {
+  throw new Error("Missing environment variables in .env file");
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+// Configuration
+const config = {
+  rpcUrl: "https://bscrpc.com",
+  privateKey: process.env.PRIVATE_KEY,
+  contractAddress: process.env.CONTRACT_ADDRESS,
+  minBorrow: ethers.parseUnits("50000", 18), // 50k USDT
+  pairs: [
+    {
+      path: [
+        "0x55d398326f99059fF775485246999027B3197955", // USDT
+        "0x0782b6d8c4551B9760e74c0545a9bCD90bdc41E5", // lisUSD
+        "0x55d398326f99059fF775485246999027B3197955"  // USDT
+      ],
+      dex: "PancakeSwap"
+    }
+  ]
+};
+
+async function main() {
+  const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+  const wallet = new ethers.Wallet(config.privateKey, provider);
+  console.log(`✅ Wallet: ${wallet.address}`);
+  
+  const contract = new ethers.Contract(
+    config.contractAddress,
+    require("./artifacts/contracts/VenusArbitrage.sol/VenusArbitrage.json").abi,
+    wallet
+  );
+
+  setInterval(async () => {
+    try {
+      const amounts = await new ethers.Contract(
+        "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+        require("./abis/PancakeRouter.json"),
+        provider
+      ).getAmountsOut.staticCall(config.minBorrow, config.pairs[0].path);
+
+      if (amounts[2] > config.minBorrow + (config.minBorrow * 175n / 10000n)) {
+        const tx = await contract.executeArbitrage(
+          config.minBorrow,
+          config.pairs[0].path,
+          config.minBorrow * 175n / 10000n,
+          { gasLimit: 800000 }
+        );
+        console.log(`✅ TX: ${tx.hash}`);
+      }
+    } catch (error) {
+      console.error(error.message);
+    }
+  }, 15000);
+}
+
+main();
